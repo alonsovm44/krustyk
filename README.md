@@ -1,9 +1,5 @@
 # Krustyk
 
-[![Crates.io](https://img.shields.io/crates/v/krustyk.svg)](https://crates.io/crates/krustyk)
-[![Docs.rs](https://docs.rs/krustyk/badge.svg)](https://docs.rs/krustyk)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 **Krustyk is a CLI tool that captures the complete context of command-line failures into a structured, portable debug bundle for AI-driven analysis.**
 
 It wraps any command, and if it fails, it generates a detailed JSON or ZIP file containing everything needed to diagnose the problem, turning ephemeral terminal errors into actionable artifacts.
@@ -27,30 +23,32 @@ Relying on incomplete logs or screenshots makes it nearly impossible for you—o
 3.  `krustyk` executes your command, and upon failure, generates a `krustyk_bundle_...json` file with the complete execution context.
 
 This bundle can then be given to an AI coding assistant for precise analysis and a suggested fix.
-## Installation 
-Run
-```sh
-cargo install krustyk
-```
+
 ## Usage
 ```sh
 # Basic usage
-krustyk [FLAGS] -- <your_command> [args...]
+krustyk <your_command> [args...]
+
+# During development with cargo
+cargo run -- <your_command> [args...]
 ```
 
 ### Flags
 You can enhance the capture with the following flags:
 
--   `--help`, `-h`: Prints help information.
--   `--version`, `-V`: Prints version information.
 -   `--red`: Captures network diagnostics (ping, traceroute) to common hosts.
 -   `--zip`: Compresses the final JSON bundle into a `.zip` file for easy sharing.
-
+-   `--quiet`: Suppresses `krustyk`'s own output, printing only the final bundle path.
+-   `--shell`, `-s`: Executes the command through the system's shell (`cmd /C` or `sh -c`), which is necessary for commands containing pipes (`|`) or redirects (`>`). You **must** quote your command when using this.
+-   `--redact-keywords <KEYWORDS>`: Comma-separated list of custom keywords to redact.
 
 **Example:**
 ```sh
 # Run a failing command, capture network info, and zip the result
-krustyk --red --zip powershell -c "Invoke-WebRequest 'http://invalid-url'; exit 1"
+cargo run -- --red --zip powershell -c "Invoke-WebRequest 'http://invalid-url'; exit 1"
+
+# Run a command with pipes by using quotes and the --shell flag
+krustyk --shell -- "npm run build | tee log.txt"
 ```
 
 ## What's in the Bundle?

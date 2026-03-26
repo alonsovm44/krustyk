@@ -159,6 +159,9 @@ fn handle_init_command() {
 # Suppress all console output from krustyk, printing only the final bundle path. (default: false)
 # quiet = false
 
+# Execute commands through the system shell (cmd /C on Windows, sh -c on Unix). (default: false)
+# shell = false
+
 # Capture network diagnostics (ping, traceroute). (default: false)
 # red = false
 
@@ -178,6 +181,7 @@ struct Config {
     zip: Option<bool>,
     quiet: Option<bool>,
     red: Option<bool>,
+    shell: Option<bool>,
     #[serde(rename = "redact-keywords")]
     redact_keywords: Option<Vec<String>>,
 }
@@ -337,6 +341,7 @@ fn print_help() {
     println!("    --red                   Run network diagnostics (ping, traceroute).");
     println!("    --zip                   Compress the output bundle into a .zip file.");
     println!("    --quiet                 Suppress all output except for the final bundle path.");
+    println!("    -s, --shell             Execute the command through the system shell (cmd /C or sh -c).");
     println!("    --redact-keywords <KW>  Comma-separated list of custom keywords to redact.");
     println!("\nConfiguration:");
     println!("  Default flags can be set in a `krustyk.toml` file in the current directory.");
@@ -364,6 +369,7 @@ fn main() {
     let mut run_network_diagnostics = config.red.unwrap_or(false);
     let mut zip_bundle = config.zip.unwrap_or(false);
     let mut is_quiet = config.quiet.unwrap_or(false);
+    let mut use_shell = config.shell.unwrap_or(false);
     let mut custom_redact_keywords: Option<Vec<String>> = config.redact_keywords;
 
     let mut command_args_filtered: Vec<String> = Vec::new();
@@ -387,6 +393,8 @@ fn main() {
             zip_bundle = true;
         } else if arg == "--quiet" {
             is_quiet = true;
+        } else if arg == "--shell" || arg == "-s" {
+            use_shell = true;
         } else if arg == "--redact-keywords" {
             if let Some(value) = args_iter.next() {
                 custom_redact_keywords = Some(value.split(',').map(|s| s.trim().to_uppercase()).collect());
@@ -407,16 +415,29 @@ fn main() {
         return;
     }
 
-    let command_to_run = &command_args_filtered[0];
-    let command_args = &command_args_filtered[1..];
+    let display_cmd = command_args_filtered[0].clone();
+    let display_args = command_args_filtered[1..].to_vec();
+
+    let (exec_cmd, exec_args) = if use_shell {
+        let shell = if env::consts::OS == "windows" { "cmd" } else { "sh" };
+        let shell_flag = if env::consts::OS == "windows" { "/C" } else { "-c" };
+        let full_command = command_args_filtered.join(" ");
+        (shell.to_string(), vec![shell_flag.to_string(), full_command])
+    } else {
+        (display_cmd.clone(), display_args.clone())
+    };
 
     if !is_quiet {
-        println!("[KrustyK] Executing: {} {}", command_to_run, command_args.join(" "));
+        if use_shell {
+            println!("[KrustyK] Executing via shell: {}", command_args_filtered.join(" "));
+        } else {
+            println!("[KrustyK] Executing: {} {}", exec_cmd, exec_args.join(" "));
+        }
         println!("------------------------------------");
     }
 
     // The actual command execution and output capture
-    let output = Command::new(command_to_run).args(command_args).output();
+    let output = Command::new(&exec_cmd).args(&exec_args).output();
 
     // After execution, we process the result
     match output {
@@ -451,8 +472,8 @@ fn main() {
                 };
 
                 let bundle = DebugBundle::capture(
-                    command_to_run,
-                    command_args,
+                    &display_cmd,
+                    &display_args,
                     output.status.code(),
                     stdout,
                     stderr,
@@ -474,10 +495,10 @@ fn main() {
         Err(e) => {
             if !is_quiet {
                 eprintln!("\n------------------------------------");
-                eprintln!("[KrustyK] => Critical Error: Failed to execute command '{}'. Reason: {}", command_to_run, e);
+                eprintln!("[KrustyK] => Critical Error: Failed to execute command '{}'. Reason: {}", exec_cmd, e);
                 println!("[KrustyK] => Generating debug bundle for execution failure...");
             }
-            let bundle = DebugBundle::capture(command_to_run, command_args, None, String::new(), e.to_string(), None, &custom_redact_keywords);
+            let bundle = DebugBundle::capture(&display_cmd, &display_args, None, String::new(), e.to_string(), None, &custom_redact_keywords);
             if let Some(path) = bundle.save_to_file(zip_bundle, is_quiet) {
                 if is_quiet {
                     println!("{}", path);
