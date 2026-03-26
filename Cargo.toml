@@ -2,10 +2,14 @@
 name = "krustyk"
 version = "0.1.0"
 edition = "2021"
+authors = ["Your Name <you@example.com>"] # Add your name and email
+license = "MIT" # Or "Apache-2.0"
+repository = "https://github.com/your-username/krustyk" # Add your repository URL
+homepage = "https://github.com/your-username/krustyk" # Optional: can be the same as repository
+readme = "README.md"
 description = "A CLI tool that captures command-line failures into a structured debug bundle for AI-driven analysis."
 
 [dependencies]
-# Eliminamos "deserialize" de la lista de features
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 zip = "2.1.3"

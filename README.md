@@ -31,12 +31,14 @@ cargo install krustyk
 ## Usage
 ```sh
 # Basic usage
-krustyk [FLAGS] <your_command> [args...]
+krustyk [FLAGS] -- <your_command> [args...]
 ```
 
 ### Flags
 You can enhance the capture with the following flags:
 
+-   `--help`, `-h`: Prints help information.
+-   `--version`, `-V`: Prints version information.
 -   `--red`: Captures network diagnostics (ping, traceroute) to common hosts.
 -   `--zip`: Compresses the final JSON bundle into a `.zip` file for easy sharing.
 

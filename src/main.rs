@@ -5,6 +5,7 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::io::Write;
 use zip::write::{FileOptions, ZipWriter};
+use zip::result::ZipError;
 use serde::{Deserialize, Serialize};
 
 /// Redacts the values of environment variables that appear to be sensitive.
@@ -287,14 +288,12 @@ impl DebugBundle {
     }
 
     fn save_as_zip(&self, json_content: &str, is_quiet: bool) -> Option<String> {
-    use zip::result::ZipError; // Asegúrate de que este import esté disponible
-
     let filename = format!("krustyk_bundle_{}.zip", self.timestamp);
     let file = match fs::File::create(&filename) {
         Ok(f) => f,
         Err(e) => {
             if !is_quiet {
-                eprintln!("[KrustyK] => Error creando archivo zip {}: {}", filename, e);
+                eprintln!("[KrustyK] => Error creating zip file {}: {}", filename, e);
             }
             return None;
         }
@@ -303,27 +302,46 @@ impl DebugBundle {
     let mut zip = ZipWriter::new(file);
     let options: FileOptions<'_, ()> = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    // EL CAMBIO ESTÁ AQUÍ:
-    // .write_all() devuelve std::io::Error, así que usamos .map_err(ZipError::from)
+    // Chain the zip operations and handle errors gracefully.
     let result = zip.start_file("bundle.json", options)
         .and_then(|_| {
-            zip.write_all(json_content.as_bytes())
-               .map_err(ZipError::from) // <--- Conversión mágica
+            zip.write_all(json_content.as_bytes()).map_err(ZipError::from)
         })
         .and_then(|_| zip.finish());
 
     if let Err(e) = result {
         if !is_quiet {
-            eprintln!("[KrustyK] => Error escribiendo en el archivo zip: {}", e);
+            eprintln!("[KrustyK] => Error writing to zip archive: {}", e);
         }
         return None;
     }
 
     if !is_quiet {
-        println!("[KrustyK] => Se guardó correctamente el bundle en {}", filename);
+        println!("[KrustyK] => Successfully saved debug bundle to {}", filename);
     }
     Some(filename)
 }
+}
+
+fn print_help() {
+    println!("KrustyK: A tool to capture and diagnose command failures.");
+    println!("\nUSAGE: krustyk <COMMAND>");
+    println!("\nCOMMANDS:");
+    println!("    init                    Creates a default krustyk.toml configuration file.");
+    println!("    help                    Prints help information.");
+    println!("    version                 Prints version information.");
+    println!("    <command> [args...]     Runs a command and captures its context on failure. Use '--' to separate flags.");
+    println!("\nFLAGS (for running commands):");
+    println!("    -h, --help              Prints help information.");
+    println!("    -V, --version           Prints version information.");
+    println!("    --red                   Run network diagnostics (ping, traceroute).");
+    println!("    --zip                   Compress the output bundle into a .zip file.");
+    println!("    --quiet                 Suppress all output except for the final bundle path.");
+    println!("    --redact-keywords <KW>  Comma-separated list of custom keywords to redact.");
+    println!("\nConfiguration:");
+    println!("  Default flags can be set in a `krustyk.toml` file in the current directory.");
+    println!("\nEXAMPLE:");
+    println!("    krustyk --zip -- npm run build");
 }
 
 fn main() {
@@ -333,6 +351,12 @@ fn main() {
     if let Some(first_arg) = all_args.get(0) {
         if first_arg == "init" {
             handle_init_command();
+            return;
+        } else if first_arg == "help" {
+            print_help();
+            return;
+        } else if first_arg == "version" {
+            println!("krustyk {}", env!("CARGO_PKG_VERSION"));
             return;
         }
     }
@@ -351,7 +375,13 @@ fn main() {
             break;
         }
 
-        if arg == "--red" {
+        if arg == "--help" || arg == "-h" {
+            print_help();
+            return;
+        } else if arg == "--version" || arg == "-V" {
+            println!("krustyk {}", env!("CARGO_PKG_VERSION"));
+            return;
+        } else if arg == "--red" {
             run_network_diagnostics = true;
         } else if arg == "--zip" {
             zip_bundle = true;
@@ -373,20 +403,7 @@ fn main() {
     }
 
     if command_args_filtered.is_empty() {
-        eprintln!("KrustyK: A tool to capture and diagnose command failures.");
-        eprintln!("\nUSAGE: krustyk <COMMAND>");
-        eprintln!("\nCOMMANDS:");
-        eprintln!("    init                    Creates a default krustyk.toml configuration file.");
-        eprintln!("    <command> [args...]     Runs a command and captures its context on failure. Use '--' to separate flags.");
-        eprintln!("\nFLAGS (for running commands):");
-        eprintln!("    --red                   Run network diagnostics (ping, traceroute).");
-        eprintln!("    --zip                   Compress the output bundle into a .zip file.");
-        eprintln!("    --quiet                 Suppress all output except for the final bundle path.");
-        eprintln!("    --redact-keywords <KW>  Comma-separated list of custom keywords to redact.");
-        eprintln!("\nConfiguration:");
-        eprintln!("  Default flags can be set in a `krustyk.toml` file in the current directory.");
-        eprintln!("\nEXAMPLE:");
-        eprintln!("    krustyk --zip -- npm run build");
+        print_help();
         return;
     }
 
