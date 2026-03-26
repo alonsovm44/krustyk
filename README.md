@@ -23,14 +23,15 @@ Relying on incomplete logs or screenshots makes it nearly impossible for you—o
 3.  `krustyk` executes your command, and upon failure, generates a `krustyk_bundle_...json` file with the complete execution context.
 
 This bundle can then be given to an AI coding assistant for precise analysis and a suggested fix.
-
+## Installation 
+Run
+```sh
+cargo install krustyk
+```
 ## Usage
 ```sh
 # Basic usage
-krustyk <your_command> [args...]
-
-# During development with cargo
-cargo run -- <your_command> [args...]
+krustyk [FLAGS] <your_command> [args...]
 ```
 
 ### Flags
@@ -39,10 +40,11 @@ You can enhance the capture with the following flags:
 -   `--red`: Captures network diagnostics (ping, traceroute) to common hosts.
 -   `--zip`: Compresses the final JSON bundle into a `.zip` file for easy sharing.
 
+
 **Example:**
 ```sh
 # Run a failing command, capture network info, and zip the result
-cargo run -- --red --zip powershell -c "Invoke-WebRequest 'http://invalid-url'; exit 1"
+krustyk --red --zip powershell -c "Invoke-WebRequest 'http://invalid-url'; exit 1"
 ```
 
 ## What's in the Bundle?

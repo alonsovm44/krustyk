@@ -5,14 +5,15 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::io::Write;
 use zip::write::{FileOptions, ZipWriter};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Redacts the values of environment variables that appear to be sensitive.
 ///
 /// It checks variable keys against a list of sensitive substrings. If a match is found,
 /// the value is replaced with `[REDACTED]`.
-fn sanitize_env_vars(vars: HashMap<String, String>) -> HashMap<String, String> {
-    let sensitive_keywords = ["KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH"];
+fn sanitize_env_vars(vars: HashMap<String, String>, custom_keywords: &Option<Vec<String>>) -> HashMap<String, String> {
+    let default_keywords = vec!["KEY".to_string(), "TOKEN".to_string(), "SECRET".to_string(), "PASSWORD".to_string(), "AUTH".to_string()];
+    let keywords = custom_keywords.as_ref().unwrap_or(&default_keywords);
     // Prefixes of environment variables injected by cargo that we want to strip out
     let ignore_prefixes = ["CARGO_PKG_", "CARGO_MANIFEST_", "RUSTUP_", "RUST_RECURSION_COUNT"];
 
@@ -20,7 +21,7 @@ fn sanitize_env_vars(vars: HashMap<String, String>) -> HashMap<String, String> {
         .filter(|(key, _)| !ignore_prefixes.iter().any(|&prefix| key.starts_with(prefix)))
         .map(|(key, value)| {
             let uppercase_key = key.to_uppercase();
-            if sensitive_keywords.iter().any(|&s| uppercase_key.contains(s)) {
+            if keywords.iter().any(|s| uppercase_key.contains(s)) {
                 (key, "[REDACTED]".to_string())
             } else {
                 (key, value)
@@ -141,6 +142,61 @@ fn get_network_diagnostics() -> HashMap<String, String> {
     diagnostics
 }
 
+fn handle_init_command() {
+    let config_filename = "krustyk.toml";
+    if std::path::Path::new(config_filename).exists() {
+        println!("[KrustyK] `krustyk.toml` already exists in this directory.");
+        return;
+    }
+
+    let default_config_content = r#"# Default configuration for krustyk.
+# Uncomment and set values to override default behavior for this project.
+
+# Compress the output bundle into a .zip file. (default: false)
+# zip = false
+
+# Suppress all console output from krustyk, printing only the final bundle path. (default: false)
+# quiet = false
+
+# Capture network diagnostics (ping, traceroute). (default: false)
+# red = false
+
+# Custom keywords to redact from environment variables.
+# By default, krustyk redacts: ["KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH"]
+# redact-keywords = ["API_KEY", "SESSION_ID", "DATABASE_URL"]
+"#;
+
+    match fs::write(config_filename, default_config_content) {
+        Ok(_) => println!("[KrustyK] Successfully created `krustyk.toml`."),
+        Err(e) => eprintln!("[KrustyK] Error: Failed to create `krustyk.toml`: {}", e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct Config {
+    zip: Option<bool>,
+    quiet: Option<bool>,
+    red: Option<bool>,
+    #[serde(rename = "redact-keywords")]
+    redact_keywords: Option<Vec<String>>,
+}
+
+/// Loads configuration from a `krustyk.toml` file in the current directory.
+/// If the file doesn't exist or fails to parse, it returns a default config.
+fn load_config() -> Config {
+    if let Ok(contents) = fs::read_to_string("krustyk.toml") {
+        match toml::from_str(&contents) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("[KrustyK] Warning: Failed to parse krustyk.toml: {}", e);
+                Config::default()
+            }
+        }
+    } else {
+        Config::default()
+    }
+}
+
 // This struct acts as our "frozen environment" container
 #[derive(Debug, Serialize)]
 struct DebugBundle {
@@ -170,6 +226,7 @@ impl DebugBundle {
         stdout: String,
         stderr: String,
         network_diagnostics: Option<HashMap<String, String>>,
+        redact_keywords: &Option<Vec<String>>,
     ) -> Self {
         let git_info = get_git_info();
         let (git_branch, git_commit, git_status) = match git_info {
@@ -188,7 +245,7 @@ impl DebugBundle {
             arch: env::consts::ARCH.to_string(),
             working_directory: env::current_dir().map(|p| p.display().to_string()).unwrap_or_else(|_| "Unknown".to_string()),
             // Collect and sanitize environment variables
-            env_vars: sanitize_env_vars(env::vars().collect()),
+            env_vars: sanitize_env_vars(env::vars().collect(), redact_keywords),
             system_logs: get_system_logs(),
             git_branch,
             git_commit,
@@ -198,125 +255,148 @@ impl DebugBundle {
         }
     }
 
-    fn save_to_file(&self, zip_bundle: bool) {
+    fn save_to_file(&self, zip_bundle: bool, is_quiet: bool) -> Option<String> {
         let json = match serde_json::to_string_pretty(self) {
             Ok(j) => j,
             Err(e) => {
                 eprintln!("[KrustyK] => Error serializing bundle: {}", e);
-                return;
+                return None;
             }
         };
 
         if zip_bundle {
-            self.save_as_zip(&json);
+            self.save_as_zip(&json, is_quiet)
         } else {
-            self.save_as_json(&json);
+            self.save_as_json(&json, is_quiet)
         }
     }
 
-    fn save_as_json(&self, json_content: &str) {
+    fn save_as_json(&self, json_content: &str, is_quiet: bool) -> Option<String> {
         let filename = format!("krustyk_bundle_{}.json", self.timestamp);
         if let Err(e) = fs::write(&filename, json_content) {
-            eprintln!("[KrustyK] => Error writing bundle to {}: {}", filename, e);
-        } else {
-            println!("[KrustyK] => Successfully saved debug bundle to {}", filename);
-        }
-    }
-
-    fn save_as_zip(&self, json_content: &str) {
-        let filename = format!("krustyk_bundle_{}.zip", self.timestamp);
-        let file = match fs::File::create(&filename) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("[KrustyK] => Error creating zip file {}: {}", filename, e);
-                return;
+            if !is_quiet {
+                eprintln!("[KrustyK] => Error writing bundle to {}: {}", filename, e);
             }
-        };
-
-        let mut zip = ZipWriter::new(file);
-        let options: FileOptions<'_, ()> = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-
-        if let Err(e) = zip.start_file("bundle.json", options) {
-            eprintln!("[KrustyK] => Error creating file in zip: {}", e);
-            return;
+            None
+        } else {
+            if !is_quiet {
+                println!("[KrustyK] => Successfully saved debug bundle to {}", filename);
+            }
+            Some(filename)
         }
-        if let Err(e) = zip.write_all(json_content.as_bytes()) {
-            eprintln!("[KrustyK] => Error writing to zip file: {}", e);
-            return;
-        }
-        if let Err(e) = zip.finish() {
-            eprintln!("[KrustyK] => Error finishing zip archive: {}", e);
-            return;
-        }
-
-        println!("[KrustyK] => Successfully saved debug bundle to {}", filename);
     }
-}
 
-fn generate_bundle(
-    command: &str,
-    args: &[String],
-    exit_code: Option<i32>,
-    stdout: String,
-    stderr: String,
-    run_network_diagnostics: bool,
-    zip_bundle: bool,
-) {
-    let net_diags = if run_network_diagnostics {
-        println!("[KrustyK] => Running network diagnostics...");
-        Some(get_network_diagnostics())
-    } else {
-        None
+    fn save_as_zip(&self, json_content: &str, is_quiet: bool) -> Option<String> {
+    use zip::result::ZipError; // Asegúrate de que este import esté disponible
+
+    let filename = format!("krustyk_bundle_{}.zip", self.timestamp);
+    let file = match fs::File::create(&filename) {
+        Ok(f) => f,
+        Err(e) => {
+            if !is_quiet {
+                eprintln!("[KrustyK] => Error creando archivo zip {}: {}", filename, e);
+            }
+            return None;
+        }
     };
 
-    let bundle = DebugBundle::capture(
-        command,
-        args,
-        exit_code,
-        stdout,
-        stderr,
-        net_diags,
-    );
+    let mut zip = ZipWriter::new(file);
+    let options: FileOptions<'_, ()> = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    bundle.save_to_file(zip_bundle);
+    // EL CAMBIO ESTÁ AQUÍ:
+    // .write_all() devuelve std::io::Error, así que usamos .map_err(ZipError::from)
+    let result = zip.start_file("bundle.json", options)
+        .and_then(|_| {
+            zip.write_all(json_content.as_bytes())
+               .map_err(ZipError::from) // <--- Conversión mágica
+        })
+        .and_then(|_| zip.finish());
+
+    if let Err(e) = result {
+        if !is_quiet {
+            eprintln!("[KrustyK] => Error escribiendo en el archivo zip: {}", e);
+        }
+        return None;
+    }
+
+    if !is_quiet {
+        println!("[KrustyK] => Se guardó correctamente el bundle en {}", filename);
+    }
+    Some(filename)
+}
 }
 
 fn main() {
-    // The first argument is the path to our program, so we skip it.
+    let config = load_config();
     let all_args: Vec<String> = env::args().skip(1).collect();
-    let mut run_network_diagnostics = false;
-    let mut zip_bundle = false;
 
-    let command_args_filtered: Vec<String> = all_args.into_iter().filter(|arg| {
+    if let Some(first_arg) = all_args.get(0) {
+        if first_arg == "init" {
+            handle_init_command();
+            return;
+        }
+    }
+
+    let mut run_network_diagnostics = config.red.unwrap_or(false);
+    let mut zip_bundle = config.zip.unwrap_or(false);
+    let mut is_quiet = config.quiet.unwrap_or(false);
+    let mut custom_redact_keywords: Option<Vec<String>> = config.redact_keywords;
+
+    let mut command_args_filtered: Vec<String> = Vec::new();
+    let mut args_iter = all_args.into_iter();
+
+    while let Some(arg) = args_iter.next() {
+        if arg == "--" {
+            command_args_filtered.extend(args_iter);
+            break;
+        }
+
         if arg == "--red" {
             run_network_diagnostics = true;
-            false // Exclude the flag from the command args
         } else if arg == "--zip" {
             zip_bundle = true;
-            false
+        } else if arg == "--quiet" {
+            is_quiet = true;
+        } else if arg == "--redact-keywords" {
+            if let Some(value) = args_iter.next() {
+                custom_redact_keywords = Some(value.split(',').map(|s| s.trim().to_uppercase()).collect());
+            } else {
+                eprintln!("[KrustyK] Error: --redact-keywords flag requires a comma-separated list of keywords.");
+                return;
+            }
         } else {
-            true // Keep the argument
+            // First argument that isn't a krustyk flag is the start of the command
+            command_args_filtered.push(arg);
+            command_args_filtered.extend(args_iter);
+            break;
         }
-    }).collect();
+    }
 
     if command_args_filtered.is_empty() {
         eprintln!("KrustyK: A tool to capture and diagnose command failures.");
-        eprintln!("\nUsage: krustyk [--red] [--zip] <command> [args...]");
-        eprintln!("   or: cargo run -- [--red] [--zip] <command> [args...]");
-        eprintln!("\nFlags:");
-        eprintln!("  --red   Run network diagnostics (ping, traceroute) and include them in the bundle.");
-        eprintln!("  --zip   Compress the output bundle into a .zip file.");
-        eprintln!("\nExample (success): cargo run -- git status");
-        eprintln!("Example (failure): cargo run -- powershell -c \"Write-Error 'oh no'; exit 1\"");
-        eprintln!("Example (with network diagnostics): cargo run -- --red cargo build");
+        eprintln!("\nUSAGE: krustyk <COMMAND>");
+        eprintln!("\nCOMMANDS:");
+        eprintln!("    init                    Creates a default krustyk.toml configuration file.");
+        eprintln!("    <command> [args...]     Runs a command and captures its context on failure. Use '--' to separate flags.");
+        eprintln!("\nFLAGS (for running commands):");
+        eprintln!("    --red                   Run network diagnostics (ping, traceroute).");
+        eprintln!("    --zip                   Compress the output bundle into a .zip file.");
+        eprintln!("    --quiet                 Suppress all output except for the final bundle path.");
+        eprintln!("    --redact-keywords <KW>  Comma-separated list of custom keywords to redact.");
+        eprintln!("\nConfiguration:");
+        eprintln!("  Default flags can be set in a `krustyk.toml` file in the current directory.");
+        eprintln!("\nEXAMPLE:");
+        eprintln!("    krustyk --zip -- npm run build");
         return;
     }
 
     let command_to_run = &command_args_filtered[0];
     let command_args = &command_args_filtered[1..];
 
-    println!("[KrustyK] Executing: {} {}", command_to_run, command_args.join(" "));
-    println!("------------------------------------");
+    if !is_quiet {
+        println!("[KrustyK] Executing: {} {}", command_to_run, command_args.join(" "));
+        println!("------------------------------------");
+    }
 
     // The actual command execution and output capture
     let output = Command::new(command_to_run).args(command_args).output();
@@ -332,31 +412,60 @@ fn main() {
                 eprint!("{}", String::from_utf8_lossy(&output.stderr));
             }
 
-            println!("\n------------------------------------");
-            println!("[KrustyK] Exit Code: {}", output.status);
+            if !is_quiet {
+                println!("\n------------------------------------");
+                println!("[KrustyK] Exit Code: {}", output.status);
+            }
 
             if !output.status.success() {
-                println!("[KrustyK] => Command failed! Generating debug bundle...");
+                if !is_quiet {
+                    println!("[KrustyK] => Command failed! Generating debug bundle...");
+                }
                 let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
                 let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-                generate_bundle(
+                
+                let net_diags = if run_network_diagnostics {
+                    if !is_quiet {
+                        println!("[KrustyK] => Running network diagnostics...");
+                    }
+                    Some(get_network_diagnostics())
+                } else {
+                    None
+                };
+
+                let bundle = DebugBundle::capture(
                     command_to_run,
                     command_args,
                     output.status.code(),
                     stdout,
                     stderr,
-                    run_network_diagnostics,
-                    zip_bundle,
+                    net_diags,
+                    &custom_redact_keywords,
                 );
+
+                if let Some(path) = bundle.save_to_file(zip_bundle, is_quiet) {
+                    if is_quiet {
+                        println!("{}", path);
+                    }
+                }
             } else {
-                println!("[KrustyK] => Command executed successfully.");
+                if !is_quiet {
+                    println!("[KrustyK] => Command executed successfully.");
+                }
             }
         }
         Err(e) => {
-            eprintln!("\n------------------------------------");
-            eprintln!("[KrustyK] => Critical Error: Failed to execute command '{}'. Reason: {}", command_to_run, e);
-            println!("[KrustyK] => Generating debug bundle for execution failure...");
-            generate_bundle(command_to_run, command_args, None, String::new(), e.to_string(), run_network_diagnostics, zip_bundle);
+            if !is_quiet {
+                eprintln!("\n------------------------------------");
+                eprintln!("[KrustyK] => Critical Error: Failed to execute command '{}'. Reason: {}", command_to_run, e);
+                println!("[KrustyK] => Generating debug bundle for execution failure...");
+            }
+            let bundle = DebugBundle::capture(command_to_run, command_args, None, String::new(), e.to_string(), None, &custom_redact_keywords);
+            if let Some(path) = bundle.save_to_file(zip_bundle, is_quiet) {
+                if is_quiet {
+                    println!("{}", path);
+                }
+            }
         }
     }
 }
