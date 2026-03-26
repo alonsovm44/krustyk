@@ -1,5 +1,9 @@
 # Krustyk
 
+[![Crates.io](https://img.shields.io/crates/v/krustyk.svg)](https://crates.io/crates/krustyk)
+[![Docs.rs](https://docs.rs/krustyk/badge.svg)](https://docs.rs/krustyk)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **Krustyk is a CLI tool that captures the complete context of command-line failures into a structured, portable debug bundle for AI-driven analysis.**
 
 It wraps any command, and if it fails, it generates a detailed JSON or ZIP file containing everything needed to diagnose the problem, turning ephemeral terminal errors into actionable artifacts.

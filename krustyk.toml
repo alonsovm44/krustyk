@@ -1,0 +1,15 @@
+# Default configuration for krustyk.
+# Uncomment and set values to override default behavior for this project.
+
+# Compress the output bundle into a .zip file. (default: false)
+# zip = false
+
+# Suppress all console output from krustyk, printing only the final bundle path. (default: false)
+# quiet = false
+
+# Capture network diagnostics (ping, traceroute). (default: false)
+# red = false
+
+# Custom keywords to redact from environment variables.
+# By default, krustyk redacts: ["KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH"]
+# redact-keywords = ["API_KEY", "SESSION_ID", "DATABASE_URL"]
