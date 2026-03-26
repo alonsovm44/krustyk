@@ -29,8 +29,6 @@ This bundle can then be given to an AI coding assistant for precise analysis and
 # Basic usage
 krustyk <your_command> [args...]
 
-# During development with cargo
-cargo run -- <your_command> [args...]
 ```
 
 ### Flags
@@ -45,7 +43,7 @@ You can enhance the capture with the following flags:
 **Example:**
 ```sh
 # Run a failing command, capture network info, and zip the result
-cargo run -- --red --zip powershell -c "Invoke-WebRequest 'http://invalid-url'; exit 1"
+krustyk --red --zip powershell -c "Invoke-WebRequest 'http://invalid-url'; exit 1"
 
 # Run a command with pipes by using quotes and the --shell flag
 krustyk --shell -- "npm run build | tee log.txt"
