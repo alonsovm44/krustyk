@@ -2,7 +2,9 @@
 name = "krustyk"
 version = "0.1.0"
 edition = "2024"
+description = "A CLI tool that captures command-line failures into a structured debug bundle for AI-driven analysis."
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+zip = "2.1.3"
